@@ -1,0 +1,75 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pcr
+      POSTGRES_PASSWORD: pcr
+      POSTGRES_DB: pcr
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pcr -d pcr"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: ../docker/Dockerfile.api
+    ports:
+      - "8000:8000"
+    environment:
+      PCR_DATABASE_URL: postgresql+asyncpg://pcr:pcr@db:5432/pcr
+      PCR_DATABASE_URL_SYNC: postgresql://pcr:pcr@db:5432/pcr
+      PCR_REDIS_URL: redis://redis:6379/0
+      PCR_CELERY_BROKER_URL: redis://redis:6379/0
+      PCR_CELERY_RESULT_BACKEND: redis://redis:6379/1
+      PCR_DEBUG: "true"
+    volumes:
+      - ../backend:/app
+      - ../data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: ../backend
+      dockerfile: ../docker/Dockerfile.api
+    environment:
+      PCR_DATABASE_URL: postgresql+asyncpg://pcr:pcr@db:5432/pcr
+      PCR_DATABASE_URL_SYNC: postgresql://pcr:pcr@db:5432/pcr
+      PCR_REDIS_URL: redis://redis:6379/0
+      PCR_CELERY_BROKER_URL: redis://redis:6379/0
+      PCR_CELERY_RESULT_BACKEND: redis://redis:6379/1
+      PCR_DEBUG: "false"
+    volumes:
+      - ../backend:/app
+      - ../data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info --concurrency=2
+
+volumes:
+  pgdata:
